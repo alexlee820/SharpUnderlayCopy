@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "SharpUnderlayCopy": {
+      "commandName": "Project",
+      "commandLineArgs": "MFT C:\\Windows\\System32\\config\\SAM C:\\Users\\leets\\Downloads\\Rubeus-master\\Rubeus-master\\Rubeus\\bin\\Debug\\sam.dmp"
+    }
+  }
+}

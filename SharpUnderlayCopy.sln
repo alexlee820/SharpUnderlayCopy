@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.13.35931.197 d17.13
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpUnderlayCopy", "SharpUnderlayCopy\SharpUnderlayCopy.csproj", "{F8B442B9-187B-4325-BF3C-B8474D67A9F2}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F8B442B9-187B-4325-BF3C-B8474D67A9F2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F8B442B9-187B-4325-BF3C-B8474D67A9F2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F8B442B9-187B-4325-BF3C-B8474D67A9F2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F8B442B9-187B-4325-BF3C-B8474D67A9F2}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {DB5666D1-152C-4949-87A2-EE80588A42FD}
+	EndGlobalSection
+EndGlobal
