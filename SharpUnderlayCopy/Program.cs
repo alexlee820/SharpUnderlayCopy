@@ -6,6 +6,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 namespace UnderlayCopy
 {
@@ -170,13 +171,28 @@ namespace UnderlayCopy
 
         static NtfsBootInfo GetNtfsBoot(string volume)
         {
-            using (var fs = new FileStream(volume, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            IntPtr hVolume = NtfsNative.CreateFileW(
+                volume,
+                0x80000000, // GENERIC_READ
+                NtfsNative.FILE_SHARE_READ | NtfsNative.FILE_SHARE_WRITE,
+                IntPtr.Zero,
+                NtfsNative.OPEN_EXISTING,
+                0,
+                IntPtr.Zero);
+
+            if (hVolume == IntPtr.Zero || hVolume == new IntPtr(-1))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateFileW failed for volume");
+
+            using (var safeHandle = new SafeFileHandle(hVolume, ownsHandle: true))
+            using (var fs = new FileStream(safeHandle, FileAccess.Read))
             {
                 byte[] buffer = new byte[512];
                 fs.Read(buffer, 0, 512);
+
                 ushort bytesPerSector = BitConverter.ToUInt16(buffer, 11);
                 byte sectorsPerCluster = buffer[13];
                 long mftCluster = BitConverter.ToInt64(buffer, 48);
+
                 return new NtfsBootInfo
                 {
                     BytesPerSector = bytesPerSector,
@@ -249,7 +265,7 @@ namespace UnderlayCopy
                 const int OUT_SIZE = 1024 * 1024;
 
                 IntPtr outBuf = Marshal.AllocHGlobal(OUT_SIZE);
-                IntPtr inBuf = Marshal.AllocHGlobal(Marshal.SizeOf<NtfsNative.STARTING_VCN_INPUT_BUFFER>());
+                IntPtr inBuf = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(NtfsNative.STARTING_VCN_INPUT_BUFFER)));
 
                 try
                 {
@@ -262,7 +278,7 @@ namespace UnderlayCopy
                             hFile,
                             NtfsNative.FSCTL_GET_RETRIEVAL_POINTERS,
                             inBuf,
-                            (uint)Marshal.SizeOf<NtfsNative.STARTING_VCN_INPUT_BUFFER>(),
+                            (uint)Marshal.SizeOf(typeof(NtfsNative.STARTING_VCN_INPUT_BUFFER)),
                             outBuf,
                             OUT_SIZE,
                             out uint bytesReturned,
@@ -272,11 +288,11 @@ namespace UnderlayCopy
                         if (!ok && err != NtfsNative.ERROR_MORE_DATA)
                             throw new Win32Exception(err, "DeviceIoControl(FSCTL_GET_RETRIEVAL_POINTERS) failed.");
 
-                        if (bytesReturned < (uint)Marshal.SizeOf<NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER>())
+                        if (bytesReturned < (uint)Marshal.SizeOf(typeof(NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER)))
                             throw new Exception("FSCTL_GET_RETRIEVAL_POINTERS returned too little data.");
 
-                        var hdr = Marshal.PtrToStructure<NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER>(outBuf);
-                        int headerSize = Marshal.SizeOf<NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER>();
+                        var hdr = (NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER)Marshal.PtrToStructure(outBuf, typeof(NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER));
+                        int headerSize = Marshal.SizeOf(typeof(NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER));
 
                         long curVcn = hdr.StartingVcn;
 
@@ -321,7 +337,20 @@ namespace UnderlayCopy
         }
         static void CopyFileByExtents(string volume, List<FileExtent> extents, long clusterSize, long totalFileSize, string destinationFile, int chunkSize = 4 * 1024 * 1024)
         {
-            using (var deviceFs = new FileStream(volume, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            IntPtr hVolume = NtfsNative.CreateFileW(
+                volume,
+                0x80000000, // GENERIC_READ
+                NtfsNative.FILE_SHARE_READ | NtfsNative.FILE_SHARE_WRITE,
+                IntPtr.Zero,
+                NtfsNative.OPEN_EXISTING,
+                0,
+                IntPtr.Zero);
+
+            if (hVolume == IntPtr.Zero || hVolume == new IntPtr(-1))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateFileW failed for volume");
+
+            using (var safeHandle = new SafeFileHandle(hVolume, ownsHandle: true))
+            using (var deviceFs = new FileStream(safeHandle, FileAccess.Read))
             using (var outFs = new FileStream(destinationFile, FileMode.Create, FileAccess.Write, FileShare.None))
             {
                 long bytesRemaining = totalFileSize;
