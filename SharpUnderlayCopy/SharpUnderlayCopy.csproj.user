@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
-    <StartArguments>Metadata C:\Windows\System32\config\System C:\Users\leets\Downloads\Rubeus-master\Rubeus-master\SharpUnderlayCopy\bin\Debug\system.dmp</StartArguments>
+    <StartArguments>MFT C:\Windows\System32\config\System C:\Users\leets\Downloads\Rubeus-master\Rubeus-master\SharpUnderlayCopy\bin\Debug\system.dmp</StartArguments>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
     <StartArguments>Metatdata C:\Windows\System32\Config\Sam Sam</StartArguments>

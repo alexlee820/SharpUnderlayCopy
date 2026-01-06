@@ -23,14 +23,22 @@ This approach enables access to **files that are locked or protected at the Win3
 
 ---
 
-### ❌ MFT Mode (Not Yet Supported)
+### ✅ MFT Mode (Supported)
 
-The original PowerShell version of UnderlayCopy supports **MFT mode**, which:
-- Parses `$MFT` records directly
-- Extracts **DATA attribute runlists**
-- Reconstructs file contents entirely from raw NTFS structures
+MFT mode reconstructs files by:
 
-⚠️ **In the current C# implementation, MFT mode is NOT yet supported.**
+- Resolving the target file’s **MFT record number** (e.g. via File Reference Number / FRN)
+- Reading the corresponding **$MFT entry** directly from disk using raw volume access (e.g. `\\.\C:`)
+- Parsing NTFS attributes inside the record (notably **$FILE_NAME** and **$DATA**)
+- Extracting **data runs** from the non-resident `$DATA` attribute (LCN + cluster length ranges)
+- Reading raw clusters directly from the volume based on recovered **LCN mappings**
+- Reassembling file contents **without using standard Win32 file reads** and **without querying live allocation metadata**
+
+This approach enables access to **files even when filesystem allocation queries are blocked, restricted, or unreliable**, because file layout is derived from the **on-disk NTFS Master File Table ($MFT)** rather than from runtime filesystem APIs.
+
+> This mode is functionally equivalent to the original PowerShell **MFT parsing / data-runs–based** workflow (read MFT record → parse `$DATA` runs → raw volume copy).
+
+> **Note:** For very small files with *resident* `$DATA`, content may be extracted directly from the MFT record without any raw disk reads.
 
 ### Prerequisites
 - Administrator privileges

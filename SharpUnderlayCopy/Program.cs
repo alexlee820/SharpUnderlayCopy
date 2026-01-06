@@ -1,11 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
-using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace UnderlayCopy
@@ -13,6 +11,7 @@ namespace UnderlayCopy
     public static class NtfsNative
     {
         public const uint FILE_READ_ATTRIBUTES = 0x80;
+        public const uint GENERIC_READ = 0x80000000; 
         public const uint FILE_SHARE_READ = 0x00000001;
         public const uint FILE_SHARE_WRITE = 0x00000002;
         public const uint FILE_SHARE_DELETE = 0x00000004;
@@ -93,12 +92,14 @@ namespace UnderlayCopy
     {
         public long VcnStart;
         public long VcnNext;
-        public long Lcn;
+        public long Lcn; 
         public long Clusters => VcnNext - VcnStart;
+
+        public bool IsSparse => Lcn < 0; 
+
         public override string ToString()
             => $"VCN: 0x{VcnStart:X}  NextVCN: 0x{VcnNext:X}  Clusters: 0x{Clusters:X}  LCN: 0x{Lcn:X}";
     }
-
 
     class Program
     {
@@ -144,22 +145,42 @@ namespace UnderlayCopy
                 var extents = GetFileExtentsNative(sourceFile);
                 Console.WriteLine($"Found {extents.Count} extents.");
                 foreach (var e in extents)
-                    Console.WriteLine($"LCN={e.Lcn} LengthClusters={e.Clusters}");
+                    Console.WriteLine($"LCN={e.Lcn} LengthClusters={e.Clusters} Sparse={e.IsSparse}");
+
                 CopyFileByExtents(volume, extents, clusterSize, sourceFileSize, destinationFile);
             }
             else if (mode.Equals("MFT", StringComparison.OrdinalIgnoreCase))
             {
-                int mftRecordNum = (int)GetNtfsFileInfo(sourceFile)["MftRecordNumber"];
-                using (var deviceFs = new FileStream(volume, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                {
-                    byte[] record = ReadMftRecord(deviceFs, ntfs, mftRecordNum);
 
+                int mftRecordNum = (int)GetNtfsFileInfo(sourceFile)["MftRecordNumber"];
+                Console.WriteLine($"MFT Record Number (for reference): {mftRecordNum}");
+
+                List<FileExtent> extents;
+                try
+                {
+                    extents = GetFileExtentsNative(sourceFile);
                 }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[!] Extents not available ({ex.Message}). Falling back to normal file copy.");
+                    File.Copy(sourceFile, destinationFile, overwrite: true);
+                    Console.WriteLine("File copied successfully (fallback).");
+                    return;
+                }
+
+                Console.WriteLine($"Found {extents.Count} extent(s).");
+                foreach (var e in extents)
+                    Console.WriteLine($"LCN={e.Lcn} LengthClusters={e.Clusters} Sparse={e.IsSparse}");
+
+                CopyFileByExtents(volume, extents, clusterSize, sourceFileSize, destinationFile);
             }
             else
             {
                 Console.WriteLine("Invalid mode. Must be MFT or Metadata.");
+                return;
             }
+
+            Console.WriteLine($"File copied successfully to {destinationFile}");
         }
 
         static bool IsAdministrator()
@@ -173,8 +194,8 @@ namespace UnderlayCopy
         {
             IntPtr hVolume = NtfsNative.CreateFileW(
                 volume,
-                0x80000000, // GENERIC_READ
-                NtfsNative.FILE_SHARE_READ | NtfsNative.FILE_SHARE_WRITE,
+                0x80000000,
+                NtfsNative.FILE_SHARE_READ | NtfsNative.FILE_SHARE_WRITE | NtfsNative.FILE_SHARE_DELETE,
                 IntPtr.Zero,
                 NtfsNative.OPEN_EXISTING,
                 0,
@@ -187,7 +208,8 @@ namespace UnderlayCopy
             using (var fs = new FileStream(safeHandle, FileAccess.Read))
             {
                 byte[] buffer = new byte[512];
-                fs.Read(buffer, 0, 512);
+                int r = fs.Read(buffer, 0, 512);
+                if (r != 512) throw new IOException("Failed to read boot sector (512 bytes).");
 
                 ushort bytesPerSector = BitConverter.ToUInt16(buffer, 11);
                 byte sectorsPerCluster = buffer[13];
@@ -216,13 +238,14 @@ namespace UnderlayCopy
 
             try
             {
-                NtfsNative.BY_HANDLE_FILE_INFORMATION info;
-                if (!NtfsNative.GetFileInformationByHandle(hFile, out info))
+                if (!NtfsNative.GetFileInformationByHandle(hFile, out var info))
                     throw new Win32Exception(Marshal.GetLastWin32Error(), $"GetFileInformationByHandle failed: {path}");
+
                 ulong frn = (((ulong)info.FileIndexHigh) << 32) | info.FileIndexLow;
                 ulong mftRecord = frn & 0x0000FFFFFFFFFFFF;
                 ulong sequenceNum = (frn >> 48) & 0xFFFF;
                 ulong size = (((ulong)info.FileSizeHigh) << 32) | info.FileSizeLow;
+
                 return new Dictionary<string, object>
                 {
                     {"VolumeSerialNumber", $"0x{info.VolumeSerialNumber:X8}"},
@@ -239,6 +262,8 @@ namespace UnderlayCopy
                 NtfsNative.CloseHandle(hFile);
             }
         }
+
+
         public static List<FileExtent> GetFileExtentsNative(string path)
         {
             string p = path.StartsWith(@"\\?\") ? path : @"\\?\" + path;
@@ -291,9 +316,10 @@ namespace UnderlayCopy
                         if (bytesReturned < (uint)Marshal.SizeOf(typeof(NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER)))
                             throw new Exception("FSCTL_GET_RETRIEVAL_POINTERS returned too little data.");
 
-                        var hdr = (NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER)Marshal.PtrToStructure(outBuf, typeof(NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER));
-                        int headerSize = Marshal.SizeOf(typeof(NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER));
+                        var hdr = (NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER)Marshal.PtrToStructure(
+                            outBuf, typeof(NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER));
 
+                        int headerSize = Marshal.SizeOf(typeof(NtfsNative.RETRIEVAL_POINTERS_BUFFER_HEADER));
                         long curVcn = hdr.StartingVcn;
 
                         for (int i = 0; i < hdr.ExtentCount; i++)
@@ -308,7 +334,7 @@ namespace UnderlayCopy
                                 {
                                     VcnStart = curVcn,
                                     VcnNext = nextVcn,
-                                    Lcn = lcn
+                                    Lcn = lcn 
                                 });
                             }
 
@@ -316,7 +342,7 @@ namespace UnderlayCopy
                             nextStartingVcn = nextVcn;
                         }
 
-                        if (ok) break;
+                        if (ok) break; 
                     }
                 }
                 finally
@@ -335,12 +361,19 @@ namespace UnderlayCopy
                 NtfsNative.CloseHandle(hFile);
             }
         }
-        static void CopyFileByExtents(string volume, List<FileExtent> extents, long clusterSize, long totalFileSize, string destinationFile, int chunkSize = 4 * 1024 * 1024)
+
+        static void CopyFileByExtents(
+            string volume,
+            List<FileExtent> extents,
+            long clusterSize,
+            long totalFileSize,
+            string destinationFile,
+            int chunkSize = 4 * 1024 * 1024)
         {
             IntPtr hVolume = NtfsNative.CreateFileW(
                 volume,
-                0x80000000, // GENERIC_READ
-                NtfsNative.FILE_SHARE_READ | NtfsNative.FILE_SHARE_WRITE,
+                0x80000000,
+                NtfsNative.FILE_SHARE_READ | NtfsNative.FILE_SHARE_WRITE | NtfsNative.FILE_SHARE_DELETE,
                 IntPtr.Zero,
                 NtfsNative.OPEN_EXISTING,
                 0,
@@ -354,22 +387,37 @@ namespace UnderlayCopy
             using (var outFs = new FileStream(destinationFile, FileMode.Create, FileAccess.Write, FileShare.None))
             {
                 long bytesRemaining = totalFileSize;
+                byte[] buffer = new byte[chunkSize];
+
                 foreach (var ext in extents)
                 {
-                    long lcn = ext.Lcn;
+                    if (bytesRemaining <= 0) break;
+
                     long clusters = ext.Clusters;
+                    if (clusters <= 0) continue;
+
                     long extentBytes = clusters * clusterSize;
                     long toCopy = Math.Min(extentBytes, bytesRemaining);
                     if (toCopy <= 0) break;
 
-                    long startOffset = lcn * clusterSize;
+                    if (ext.IsSparse)
+                    {
+                        WriteZeros(outFs, buffer, toCopy);
+                        bytesRemaining -= toCopy;
+                        continue;
+                    }
+
+                    long lcn = ext.Lcn;
+                    if (lcn < 0) throw new InvalidOperationException("Unexpected negative LCN (non-sparse).");
+
+                    long startOffset = checked(lcn * clusterSize);
                     deviceFs.Seek(startOffset, SeekOrigin.Begin);
 
                     long copied = 0;
-                    byte[] buffer = new byte[chunkSize];
                     while (copied < toCopy)
                     {
-                        int readSize = (int)Math.Min(chunkSize, toCopy - copied);
+                        int readSize = (int)Math.Min((long)buffer.Length, toCopy - copied);
+
                         int read = 0;
                         while (read < readSize)
                         {
@@ -377,25 +425,30 @@ namespace UnderlayCopy
                             if (r <= 0) throw new Exception("Unexpected end of device read");
                             read += r;
                         }
+
                         outFs.Write(buffer, 0, read);
                         copied += read;
                     }
-                    bytesRemaining -= copied;
-                    if (bytesRemaining <= 0) break;
+
+                    bytesRemaining -= toCopy;
                 }
+
+                outFs.Flush(true);
             }
         }
 
-        static byte[] ReadMftRecord(FileStream fs, NtfsBootInfo ntfs, int recNum)
+        static void WriteZeros(Stream outFs, byte[] buffer, long bytes)
         {
-            int MftRecordSize = 1024;
-            long mftOffset = ntfs.MftCluster * ntfs.ClusterSize;
-            long recOffset = mftOffset + recNum * MftRecordSize;
-            fs.Seek(recOffset, SeekOrigin.Begin);
-            byte[] record = new byte[MftRecordSize];
-            fs.Read(record, 0, MftRecordSize);
-            return record;
+            Array.Clear(buffer, 0, buffer.Length);
+            long written = 0;
+            while (written < bytes)
+            {
+                int n = (int)Math.Min(buffer.Length, bytes - written);
+                outFs.Write(buffer, 0, n);
+                written += n;
+            }
         }
+
 
     }
 }
