@@ -6,8 +6,55 @@ using System.Runtime.InteropServices;
 using System.Security.Principal;
 using Microsoft.Win32.SafeHandles;
 
+using System.Security.Cryptography;
+
+
+
 namespace UnderlayCopy
 {
+
+    public static class RC4
+    {
+        public static byte[] Encrypt(byte[] data, byte[] key)
+        {
+            var S = new byte[256];
+            for (int i = 0; i < 256; i++) S[i] = (byte)i;
+
+            int j = 0;
+            for (int i = 0; i < 256; i++)
+            {
+                j = (j + S[i] + key[i % key.Length]) & 0xFF;
+                (S[i], S[j]) = (S[j], S[i]);
+            }
+
+            var result = new byte[data.Length];
+            int iidx = 0, jidx = 0;
+            for (int k = 0; k < data.Length; k++)
+            {
+                iidx = (iidx + 1) & 0xFF;
+                jidx = (jidx + S[iidx]) & 0xFF;
+                (S[iidx], S[jidx]) = (S[jidx], S[iidx]);
+                var rnd = S[(S[iidx] + S[jidx]) & 0xFF];
+                result[k] = (byte)(data[k] ^ rnd);
+            }
+            return result;
+        }
+    }
+
+    public static class AESHelper
+    {
+        public static byte[] Encrypt(byte[] data, byte[] key, byte[] iv)
+        {
+            var aes = Aes.Create();
+            aes.Key = key;
+            aes.IV = iv;
+            aes.Mode = CipherMode.CBC;
+            var encryptor = aes.CreateEncryptor();
+            return encryptor.TransformFinalBlock(data, 0, data.Length);
+        }
+    }
+    public enum EncryptionType { None, RC4, AES256 }
+
     public static class NtfsNative
     {
         public const uint FILE_READ_ATTRIBUTES = 0x80;
@@ -115,24 +162,37 @@ namespace UnderlayCopy
         public long FileSize;
         public byte[] ResidentBytes;
         public List<DataRun> Runs;
-
+        
         class Program
         {
             private const int MFT_RECORD_SIZE = 1024;
-
+            enum EncryptionType { None, RC4, AES256 }
             static void Main(string[] args)
             {
                 // Usage: SharpUnderlayCopy.exe MFT|Metadata <source> <dest>
-                if (args.Length != 3)
+                if (args.Length < 3)
                 {
-                    Console.WriteLine("Usage: SharpUnderlayCopy.exe MFT|Metadata <source> <dest>");
+                    Console.WriteLine("Usage: SharpUnderlayCopy.exe MFT|Metadata <source> <dest> <EncryptionType> <key> ");
                     return;
                 }
 
                 string mode = args[0];
                 string sourceFile = args[1];
                 string destinationFile = args[2];
+                EncryptionType encType = EncryptionType.None;
+                string encKey = "";
+                if (args.Length > 3 )
+                {
+                    Enum.TryParse(args[3], true, out encType);
 
+                }
+                if (args.Length > 4) {
+                    encKey = args[4];
+                }
+                else
+                {
+                    encKey = "alexlee820";
+                }
                 string volume = @"\\.\C:";
                 string volumeRoot = @"C:\";
 
@@ -163,7 +223,7 @@ namespace UnderlayCopy
                     foreach (var e in extents)
                         Console.WriteLine($"LCN={e.Lcn} LengthClusters={e.Clusters} Sparse={e.IsSparse}");
 
-                    CopyFileByExtents(volume, extents, clusterSize, sourceFileSize, destinationFile);
+                    CopyFileByExtents(volume, extents, clusterSize, sourceFileSize, destinationFile,encType,encKey);
                     Console.WriteLine($"File copied successfully to {destinationFile}");
                 }
                 else if (mode.Equals("MFT", StringComparison.OrdinalIgnoreCase))
@@ -177,13 +237,24 @@ namespace UnderlayCopy
 
                     if (data.IsResident)
                     {
-                        Console.WriteLine($"Resident $DATA: {data.FileSize} bytes");
-                        File.WriteAllBytes(destinationFile, data.ResidentBytes);
+                        byte[] output = data.ResidentBytes;
+                        if (encType == EncryptionType.RC4)
+                            output = RC4.Encrypt(output, System.Text.Encoding.UTF8.GetBytes(encKey));
+                        else if (encType == EncryptionType.AES256)
+                        {
+                            byte[] keyBytes = new byte[32];
+                            byte[] srcKey = System.Text.Encoding.UTF8.GetBytes(encKey);
+                            Array.Copy(srcKey, 0, keyBytes, 0, Math.Min(srcKey.Length, keyBytes.Length));
+
+                            byte[] ivBytes = new byte[16]; 
+                            output = AESHelper.Encrypt(output, keyBytes, ivBytes);
+                        }
+                        File.WriteAllBytes(destinationFile, output);
                     }
                     else
                     {
                         Console.WriteLine($"Non-resident $DATA: {data.FileSize} bytes, runs={data.Runs.Count}");
-                        CopyByDataRuns(volume, data.Runs, ntfs.ClusterSize, data.FileSize, destinationFile);
+                        CopyByDataRuns(volume, data.Runs, ntfs.ClusterSize, data.FileSize, destinationFile, encType, encKey);
                     }
 
                     Console.WriteLine($"File copied successfully to {destinationFile}");
@@ -371,7 +442,7 @@ namespace UnderlayCopy
                 }
             }
 
-            static void CopyFileByExtents(string volume, List<FileExtent> extents, long clusterSize, long totalFileSize, string destinationFile, int chunkSize = 4 * 1024 * 1024)
+            static void CopyFileByExtents(string volume, List<FileExtent> extents, long clusterSize, long totalFileSize, string destinationFile, EncryptionType encType, string key ,int chunkSize = 4 * 1024 * 1024)
             {
                 IntPtr hVolume = NtfsNative.CreateFileW(
                     volume,
@@ -387,7 +458,7 @@ namespace UnderlayCopy
 
                 using (var safeHandle = new SafeFileHandle(hVolume, ownsHandle: true))
                 using (var deviceFs = new FileStream(safeHandle, FileAccess.Read))
-                using (var outFs = new FileStream(destinationFile, FileMode.Create, FileAccess.Write, FileShare.None))
+                using (var mem = new MemoryStream())
                 {
                     long bytesRemaining = totalFileSize;
                     byte[] buffer = new byte[chunkSize];
@@ -405,7 +476,7 @@ namespace UnderlayCopy
 
                         if (ext.IsSparse)
                         {
-                            WriteZeros(outFs, buffer, toCopy);
+                            mem.Write(new byte[toCopy], 0, (int)toCopy);
                             bytesRemaining -= toCopy;
                             continue;
                         }
@@ -424,14 +495,27 @@ namespace UnderlayCopy
                                 if (r <= 0) throw new Exception("Unexpected end of device read");
                                 read += r;
                             }
-                            outFs.Write(buffer, 0, read);
+                            mem.Write(buffer, 0, read);
                             copied += read;
                         }
 
                         bytesRemaining -= toCopy;
                     }
 
-                    outFs.Flush(true);
+                    byte[] output = mem.ToArray();
+                    if (encType == EncryptionType.RC4)
+                        output = RC4.Encrypt(output, System.Text.Encoding.UTF8.GetBytes(key));
+                    else if (encType == EncryptionType.AES256)
+                    {
+                        byte[] keyBytes = new byte[32];
+                        byte[] srcKey = System.Text.Encoding.UTF8.GetBytes(key);
+                        Array.Copy(srcKey, 0, keyBytes, 0, Math.Min(srcKey.Length, keyBytes.Length));
+
+                        byte[] ivBytes = new byte[16]; 
+                        output = AESHelper.Encrypt(output, keyBytes, ivBytes);
+                    }
+
+                    File.WriteAllBytes(destinationFile, output);
                 }
             }
 
@@ -680,7 +764,7 @@ namespace UnderlayCopy
                 return runs;
             }
 
-            static void CopyByDataRuns(string volumeDevice, List<DataRun> runs, long clusterSize, long totalSize, string destinationFile, int chunkSize = 4 * 1024 * 1024)
+            static void CopyByDataRuns(string volumeDevice, List<DataRun> runs, long clusterSize, long totalSize, string destinationFile, EncryptionType encType,  string key, int chunkSize = 4 * 1024 * 1024)
             {
                 IntPtr hVol = NtfsNative.CreateFileW(
                     volumeDevice,
@@ -696,7 +780,7 @@ namespace UnderlayCopy
 
                 var sh = new SafeFileHandle(hVol, ownsHandle: true);
                 var volFs = new FileStream(sh, FileAccess.Read);
-                var outFs = new FileStream(destinationFile, FileMode.Create, FileAccess.Write, FileShare.None);
+                var mem = new MemoryStream();
 
                 byte[] buffer = new byte[chunkSize];
                 long written = 0;
@@ -711,7 +795,8 @@ namespace UnderlayCopy
 
                     if (r.Lcn == 0)
                     {
-                        WriteZeros(outFs, buffer, toCopy);
+                        byte[] zeros = new byte[(int)toCopy];
+                        mem.Write(zeros, 0, (int)toCopy);
                         written += toCopy;
                         continue;
                     }
@@ -732,14 +817,28 @@ namespace UnderlayCopy
                             read += n;
                         }
 
-                        outFs.Write(buffer, 0, read);
+                        mem.Write(buffer, 0, read);
                         copied += read;
                     }
 
                     written += toCopy;
                 }
 
-                outFs.Flush(true);
+                byte[] output = mem.ToArray();
+                if (encType == EncryptionType.RC4)
+                    output = RC4.Encrypt(output, System.Text.Encoding.UTF8.GetBytes(key));
+                else if (encType == EncryptionType.AES256)
+                {
+                    byte[] keyBytes = new byte[32];
+                    byte[] srcKey = System.Text.Encoding.UTF8.GetBytes(key);
+                    Array.Copy(srcKey, 0, keyBytes, 0, Math.Min(srcKey.Length, keyBytes.Length));
+
+                    byte[] ivBytes = new byte[16];
+
+                    output = AESHelper.Encrypt(output, keyBytes, ivBytes);
+                }
+                File.WriteAllBytes(destinationFile, output);
+
             }
 
             static ushort U16(byte[] b, int o) => BitConverter.ToUInt16(b, o);
