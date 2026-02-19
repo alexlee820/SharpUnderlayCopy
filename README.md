@@ -12,7 +12,7 @@ This feature is designed to help **evade EDR (Endpoint Detection and Response) s
 
 - **Encryption options**: RC4 or AES, selectable via function parameters or CLI switch.
 - **When enabled**, file contents are encrypted during acquisition and written in an encrypted form.
-- **Decryption utility** or code sample provided (see [Decrypting Acquisitions](#decrypting-acquisitions)).
+- **Decryption utility provided**: A Python script (`AESdecrypt.py` and `RC4encrypt.py`) for AES256 and RC4 decryption is included in this repository 
 - Intended for offensive research and situations requiring additional OPSEC/anti-EDR considerations.
 
 > ⚠️ **Note:** Usage of encryption does not guarantee evasion. Use responsibly within legal and ethical boundaries.
