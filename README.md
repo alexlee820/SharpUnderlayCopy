@@ -5,6 +5,48 @@
 This version is intended to support **.NET loaders (e.g. NetLoader / in-memory execution)** and focuses on **raw NTFS metadata–driven acquisition** for research, red-team, and DFIR use cases.
 
 ---
+
+## 🔧 Improvements over UnderlayCopy
+
+SharpUnderlayCopy introduces several key improvements over the original PowerShell-based UnderlayCopy:
+
+### No `fsutil` Dependency — Native `DeviceIoControl` API
+
+The original UnderlayCopy relies on spawning `fsutil` as a child process to query NTFS cluster allocation metadata (VCN → LCN mappings). This approach has notable drawbacks in offensive and DFIR contexts:
+
+- **Process creation is detectable** — EDR/AV solutions commonly flag or log `fsutil.exe` invocations, particularly when called programmatically from non-interactive sessions.
+- **Output parsing is fragile** — fsutil output is text-based and locale-dependent, making it unreliable across system configurations.
+- **No direct control** — spawning a subprocess introduces unnecessary noise and limits portability for in-memory execution.
+
+SharpUnderlayCopy eliminates this dependency entirely by calling the **Windows API `DeviceIoControl`** directly:
+
+| Capability | UnderlayCopy (PowerShell) | SharpUnderlayCopy (.NET/C#) |
+|---|---|---|
+| VCN → LCN mapping | `fsutil` subprocess | `DeviceIoControl` (`FSCTL_GET_RETRIEVAL_POINTERS`) |
+| Volume sector read | `fsutil` / file API | Raw handle + `ReadFile` on `\\.\C:` |
+| Process noise | Spawns `fsutil.exe` | No child process, all in-process |
+| EDR visibility | High (process creation) | Lower (direct API calls) |
+| Locale sensitivity | Yes (text parsing) | No (binary API response) |
+
+By issuing `FSCTL_GET_RETRIEVAL_POINTERS` and `FSCTL_GET_NTFS_VOLUME_DATA` directly via `DeviceIoControl`, all cluster mapping is performed **in-process** with no subprocess creation, no stdout parsing, and no dependency on the `fsutil` binary being present or accessible.
+
+---
+
+### Encryption Support — Eliminating Cleartext Artifacts
+
+The original UnderlayCopy writes reconstructed file contents to disk in **plaintext**, which creates forensic artifacts and may trigger EDR detections based on content signatures (e.g. NTLM hash structures in SAM/SYSTEM hives, NTDS.dit patterns).
+
+SharpUnderlayCopy addresses this with **optional in-flight encryption** of acquired data:
+
+- **RC4** — lightweight stream cipher, applied during buffer assembly before any disk write.
+- **AES256** — stronger symmetric encryption for higher OPSEC requirements.
+- Encrypted output is written directly, meaning **cleartext file content never touches disk**.
+- Companion decryption scripts (`RC4encrypt.py`, `AESdecrypt.py`) are provided for offline recovery.
+
+This significantly reduces the risk of signature-based detection during file acquisition of high-value targets such as `SAM`, `SYSTEM`, `SECURITY`, and `ntds.dit`.
+
+---
+
 ## 🆕 New: Optional Evasion via RC4/AES Encryption
 
 **SharpUnderlayCopy now includes optional encryption for on-disk and in-memory file reconstruction buffers using RC4 and AES algorithms.**  
@@ -31,7 +73,7 @@ Metadata mode reconstructs files by:
 
 This approach enables access to **files that are locked or protected at the Win32 API level**, while still relying on filesystem metadata rather than snapshots.
 
-> This mode is functionally equivalent to the original PowerShell **metadata / fsutil-based** workflow.
+> This mode is functionally equivalent to the original PowerShell **metadata / fsutil-based** workflow, but implemented entirely via `DeviceIoControl` with no subprocess dependency.
 
 ---
 
@@ -39,7 +81,7 @@ This approach enables access to **files that are locked or protected at the Win3
 
 MFT mode reconstructs files by:
 
-- Resolving the target file’s **MFT record number** (e.g. via File Reference Number / FRN)
+- Resolving the target file's **MFT record number** (e.g. via File Reference Number / FRN)
 - Reading the corresponding **$MFT entry** directly from disk using raw volume access (e.g. `\\.\C:`)
 - Parsing NTFS attributes inside the record (notably **$FILE_NAME** and **$DATA**)
 - Extracting **data runs** from the non-resident `$DATA` attribute (LCN + cluster length ranges)
